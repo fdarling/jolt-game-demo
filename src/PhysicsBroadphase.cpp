@@ -8,7 +8,7 @@ BPLayerInterfaceImpl::BPLayerInterfaceImpl()
 
 JPH::uint BPLayerInterfaceImpl::GetNumBroadPhaseLayers() const
 {
-    return 2;
+    return PhysicsLayers::NUM_LAYERS;
 }
 
 JPH::BroadPhaseLayer BPLayerInterfaceImpl::GetBroadPhaseLayer(JPH::ObjectLayer inLayer) const
@@ -21,8 +21,8 @@ const char * BPLayerInterfaceImpl::GetBroadPhaseLayerName(JPH::BroadPhaseLayer i
 {
     switch (static_cast<JPH::BroadPhaseLayer::Type>(inLayer))
     {
-        case 0: return "NON_MOVING";
-        case 1: return "MOVING";
+        case PhysicsLayers::NON_MOVING: return "NON_MOVING";
+        case PhysicsLayers::MOVING: return "MOVING";
         default: JPH_ASSERT(false); return "INVALID";
     }
 }

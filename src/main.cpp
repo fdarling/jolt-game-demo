@@ -26,15 +26,22 @@
 // constants
 constexpr int MAX_SUBSTEPS = 10;
 constexpr float FIXED_TIMESTEP = 1.0/120.0;
-constexpr float ELEVATOR_THICKNESS = 2.0;
-constexpr float BOX_THICKNESS = 0.6;
-constexpr float SPHERE_DIAMETER = 4.0;
+constexpr float FLOOR_WIDTH = 25.0;
+constexpr float FLOOR_THICKNESS = 1.0;
+constexpr float ELEVATOR_THICKNESS = 0.25;
+constexpr float ELEVATOR_WIDTH = 6.0;
+constexpr float JUMP_PAD_THICKNESS = 0.25;
+constexpr float JUMP_PAD_WIDTH = 2.0;
+constexpr float STACKED_BOX_THICKNESS = 0.125;
+constexpr float STACKED_BOX_WIDTH = 2.0;
+constexpr float SPHERE_DIAMETER = 1.0;
 constexpr float BALL_DIAMETER = 0.5;
+constexpr float BALL_INITIAL_SPEED = 15.0;
 constexpr float ELEVATOR_CYCLE_TIME = 12.0f; // 4s up + 2s pause + 4s down + 2s pause
 constexpr float ELEVATOR_TRAVEL_TIME = 4.0f; // Time to travel 20m at 5m/s
 constexpr float ELEVATOR_PAUSE_TIME = 2.0f;
-constexpr float ELEVATOR_LOWER_Y = 1.0f;
-constexpr float ELEVATOR_UPPER_Y = 21.0f;
+constexpr float ELEVATOR_LOWER_Y = ELEVATOR_THICKNESS/2.0;
+constexpr float ELEVATOR_UPPER_Y = 22.0 - ELEVATOR_THICKNESS/2.0;
 constexpr float MOUSELOOK_SENSITIVITY = 0.002f;
 constexpr float WALK_SPEED = 50.0f;
 
@@ -145,15 +152,16 @@ static int mainBody(int argc, char **argv)
     JPH::BodyInterface& body_interface = physics_system.GetBodyInterface();
 
     // add a floor box
-    JPH::BodyCreationSettings floor_settings(new JPH::BoxShape(JPH::Vec3(100.0f, 1.0f, 100.0f)),
-                                             JPH::RVec3(0.0, -1.0, 0.0), JPH::Quat::sIdentity(),
+    JPH::BodyCreationSettings floor_settings(new JPH::BoxShape(JPH::Vec3(FLOOR_WIDTH/2.0, FLOOR_THICKNESS/2.0, FLOOR_WIDTH/2.0)),
+                                             JPH::RVec3(0.0, -FLOOR_THICKNESS/2.0, 0.0), JPH::Quat::sIdentity(),
                                              JPH::EMotionType::Static, PhysicsLayers::NON_MOVING);
     JPH::BodyID floor_id = body_interface.CreateAndAddBody(floor_settings, JPH::EActivation::DontActivate);
 
     // create a "jump pad" (anything that touches it gets launched upward)
-    JPH::BodyCreationSettings jump_pad_settings(new JPH::BoxShape(JPH::Vec3(10.0f, 1.0f, 10.0f)),
-                                                JPH::RVec3(30.0, 0.5, 0.0), JPH::Quat::sIdentity(),
+    JPH::BodyCreationSettings jump_pad_settings(new JPH::BoxShape(JPH::Vec3(JUMP_PAD_WIDTH/2.0, JUMP_PAD_THICKNESS/2.0, JUMP_PAD_WIDTH/2.0)),
+                                                JPH::RVec3(7.0, JUMP_PAD_THICKNESS/2.0, 7.0), JPH::Quat::sIdentity(),
                                                 JPH::EMotionType::Static, PhysicsLayers::NON_MOVING);
+    jump_pad_settings.mIsSensor = true;
     JPH::BodyID jump_pad_id = body_interface.CreateAndAddBody(jump_pad_settings, JPH::EActivation::DontActivate);
 
     // set up contact listener (only for the jump pad currently)
@@ -165,28 +173,30 @@ static int mainBody(int argc, char **argv)
     physics_system.SetContactListener(jump_listener.get());
 
     // add elevator (kinematic box, animated to move up and down)
-    JPH::BodyCreationSettings elevator_settings(new JPH::BoxShape(JPH::Vec3(10.0f, ELEVATOR_THICKNESS/2.0, 10.0f)),
-                                                JPH::RVec3(0.0, 1.0, 0.0), JPH::Quat::sIdentity(),
+    JPH::BodyCreationSettings elevator_settings(new JPH::BoxShape(JPH::Vec3(ELEVATOR_WIDTH/2.0, ELEVATOR_THICKNESS/2.0, ELEVATOR_WIDTH/2.0)),
+                                                JPH::RVec3(0.0, ELEVATOR_LOWER_Y, 0.0), JPH::Quat::sIdentity(),
                                                 JPH::EMotionType::Kinematic, PhysicsLayers::MOVING);
     JPH::BodyID elevator_id = body_interface.CreateAndAddBody(elevator_settings, JPH::EActivation::Activate);
 
     // add stack of 3 boxes on the elevator (offset to the side, leaving room for sphere in center)
-    JPH::Ref<JPH::Shape> box_shape = new JPH::BoxShape(JPH::Vec3(3.0f, 0.3f, 3.0f));  // ~1/3 size of elevator
+    JPH::Ref<JPH::Shape> box_shape = new JPH::BoxShape(JPH::Vec3(STACKED_BOX_WIDTH/2.0, STACKED_BOX_THICKNESS/2.0, STACKED_BOX_WIDTH/2.0));
     JPH::BodyCreationSettings box_settings(box_shape, JPH::RVec3(0.0, 0.0, 0.0), JPH::Quat::sIdentity(), JPH::EMotionType::Dynamic, PhysicsLayers::MOVING);
+    // TODO set the mass!
     box_settings.mLinearDamping = 0.01f;
     box_settings.mAngularDamping = 0.01f;
     box_settings.mRestitution = 0.5f;
-    box_settings.mPosition = JPH::RVec3(-8.0, ELEVATOR_THICKNESS + 0.5*BOX_THICKNESS, 0.0);  // On elevator top (y=2) + half-height (0.3)
+    box_settings.mPosition = JPH::RVec3(-ELEVATOR_WIDTH/2.0 + STACKED_BOX_WIDTH/2.0, ELEVATOR_THICKNESS + 0.5*STACKED_BOX_THICKNESS, -ELEVATOR_WIDTH/2.0 + STACKED_BOX_WIDTH/2.0);  // On elevator top (y=2) + half-height (0.3)
     JPH::BodyID box1_id = body_interface.CreateAndAddBody(box_settings, JPH::EActivation::Activate);
-    box_settings.mPosition = JPH::RVec3(-8.0, ELEVATOR_THICKNESS + 1.5*BOX_THICKNESS, 0.0);  // Bottom top (2.3 + 0.6)
+    box_settings.mPosition = JPH::RVec3(-ELEVATOR_WIDTH/2.0 + STACKED_BOX_WIDTH/2.0, ELEVATOR_THICKNESS + 1.5*STACKED_BOX_THICKNESS, -ELEVATOR_WIDTH/2.0 + STACKED_BOX_WIDTH/2.0);  // Bottom top (2.3 + 0.6)
     JPH::BodyID box2_id = body_interface.CreateAndAddBody(box_settings, JPH::EActivation::Activate);
-    box_settings.mPosition = JPH::RVec3(-8.0, ELEVATOR_THICKNESS + 2.5*BOX_THICKNESS, 0.0);  // Middle top (2.9 + 0.6)
+    box_settings.mPosition = JPH::RVec3(-ELEVATOR_WIDTH/2.0 + STACKED_BOX_WIDTH/2.0, ELEVATOR_THICKNESS + 2.5*STACKED_BOX_THICKNESS, -ELEVATOR_WIDTH/2.0 + STACKED_BOX_WIDTH/2.0);  // Middle top (2.9 + 0.6)
     JPH::BodyID box3_id = body_interface.CreateAndAddBody(box_settings, JPH::EActivation::Activate);
 
     // create falling sphere (starts above elevator, falls onto it)
     JPH::BodyCreationSettings sphere_settings(new JPH::SphereShape(SPHERE_DIAMETER/2.0),
                                               JPH::RVec3(0.0, 10.0, 0.0), JPH::Quat::sIdentity(),
                                               JPH::EMotionType::Dynamic, PhysicsLayers::MOVING);
+    // TODO set the mass!
     sphere_settings.mLinearDamping = 0.01f;
     sphere_settings.mAngularDamping = 0.01f;
     sphere_settings.mRestitution = 0.1f; // Some bounciness
@@ -201,8 +211,8 @@ static int mainBody(int argc, char **argv)
 
     // camera state
     float camera_x = 0.0f;
-    float camera_y = 10.0f;
-    float camera_z = 30.0f;
+    float camera_y = 2.5f;
+    float camera_z = 10.0f;
     float camera_yaw = -M_PI/2.0; // face the elevator
     float camera_pitch = 0.0f;
 
@@ -247,16 +257,21 @@ static int mainBody(int argc, char **argv)
                     const JPH::Vec3 forward(cos(camera_yaw) * cos(camera_pitch),
                                             sin(camera_pitch),
                                             sin(camera_yaw) * cos(camera_pitch));
-                    const JPH::Vec3 velocity = forward * 15.0f;
+                    const JPH::Vec3 velocity = forward * BALL_INITIAL_SPEED;
 
-                    JPH::BodyCreationSettings bullet_settings(new JPH::SphereShape(0.25f),
+                    JPH::BodyCreationSettings bullet_settings(new JPH::SphereShape(BALL_DIAMETER/2.0),
                                                               JPH::RVec3(camera_x, camera_y, camera_z),
                                                               JPH::Quat::sIdentity(),
                                                               JPH::EMotionType::Dynamic, PhysicsLayers::MOVING);
+                    // TODO set the mass!
+                    // JPH::MassProperties msp;
+                    // msp.ScaleToMass(1.0); // kg
+                    // bullet_settings.mMassPropertiesOverride = msp;
+                    // bullet_settings.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
                     bullet_settings.mLinearVelocity = velocity;
                     bullet_settings.mLinearDamping = 0.01f;
                     bullet_settings.mAngularDamping = 0.01f;
-                    bullet_settings.mRestitution = 0.5f;
+                    bullet_settings.mRestitution = 0.1f;
                     const JPH::BodyID ball_id = body_interface.CreateAndAddBody(bullet_settings, JPH::EActivation::Activate);
                     ball_ids.push_back(ball_id);
                 }

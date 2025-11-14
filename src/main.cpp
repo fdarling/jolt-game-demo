@@ -10,6 +10,7 @@
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
+#include <Jolt/Physics/Constraints/SixDOFConstraint.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/Body.h>
 
@@ -24,8 +25,6 @@
 #include "PhysicsContactListener.h"
 
 // constants
-constexpr int MAX_SUBSTEPS = 10;
-constexpr float FIXED_TIMESTEP = 1.0/120.0;
 constexpr float FLOOR_WIDTH = 25.0;
 constexpr float FLOOR_THICKNESS = 1.0;
 constexpr float ELEVATOR_THICKNESS = 0.25;
@@ -37,15 +36,21 @@ constexpr float STACKED_BOX_WIDTH = 2.0;
 constexpr float SPHERE_DIAMETER = 1.0;
 constexpr float BALL_DIAMETER = 0.5;
 constexpr float BALL_INITIAL_SPEED = 15.0;
-constexpr float ELEVATOR_CYCLE_TIME = 12.0f; // 4s up + 2s pause + 4s down + 2s pause
-constexpr float ELEVATOR_TRAVEL_TIME = 4.0f; // Time to travel 20m at 5m/s
-constexpr float ELEVATOR_PAUSE_TIME = 2.0f;
+constexpr float ELEVATOR_TRAVEL_TIME = 4.0;
+constexpr float ELEVATOR_PAUSE_TIME = 3.0;
+constexpr float ELEVATOR_CYCLE_TIME = 2.0*ELEVATOR_TRAVEL_TIME + 2.0*ELEVATOR_PAUSE_TIME;
 constexpr float ELEVATOR_LOWER_Y = ELEVATOR_THICKNESS/2.0;
 constexpr float ELEVATOR_UPPER_Y = 22.0 - ELEVATOR_THICKNESS/2.0;
+constexpr float LADDER_HEIGHT = 10.0;
+constexpr float LADDER_WIDTH = 2.0;
+constexpr float BALLOON_DIAMETER = 1.0;
+constexpr float BALLOON_RADIUS = BALLOON_DIAMETER/2.0;
 constexpr float MOUSELOOK_SENSITIVITY = 0.002f;
-constexpr float WALK_SPEED = 50.0f;
+constexpr float WALK_SPEED = 20.0f;
 
 // configure Jolt physics maximum limits
+constexpr int MAX_SUBSTEPS = 10;
+constexpr float FIXED_TIMESTEP = 1.0/120.0;
 constexpr int JOLT_MAX_BODIES = 1024;
 constexpr int JOLT_NUM_BODY_MUTEXES = 0;
 constexpr int JOLT_MAX_BODY_PAIRS = 65536;
@@ -206,6 +211,30 @@ static int mainBody(int argc, char **argv)
     JPH::TempAllocatorImpl temp_allocator(10 * 1024 * 1024);
     JPH::JobSystemThreadPool job_system(JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers, 0); // 0 threads for single-threaded
 
+    // create "ladder" box
+    JPH::BodyCreationSettings ladder_settings(new JPH::BoxShape(JPH::Vec3(LADDER_WIDTH/2.0, LADDER_HEIGHT/2.0, LADDER_WIDTH/2.0)), JPH::RVec3(-6.0, LADDER_HEIGHT/2.0, 6.0), JPH::Quat::sIdentity(),
+                                              JPH::EMotionType::Static, PhysicsLayers::NON_MOVING);
+    JPH::BodyID ladder_id = body_interface.CreateAndAddBody(ladder_settings, JPH::EActivation::DontActivate);
+
+    // create "balloon" (no gravity, floating) that will be attached to the "ladder"
+    JPH::BodyCreationSettings balloon_settings(new JPH::SphereShape(BALLOON_DIAMETER/2.0), JPH::RVec3(0.0, 12.0, 0.0), JPH::Quat::sIdentity(),
+                                               JPH::EMotionType::Dynamic, PhysicsLayers::MOVING);
+    balloon_settings.mGravityFactor = 0.0f;
+    JPH::BodyID balloon_id = body_interface.CreateAndAddBody(balloon_settings, JPH::EActivation::Activate);
+
+    // create constraint to "attach" the balloon to the surface of the "ladder"
+    JPH::SixDOFConstraintSettings constraint_settings;
+    constexpr float LADDER_MARGIN = 0.001;
+    constraint_settings.mSpace = JPH::EConstraintSpace::LocalToBodyCOM;
+    constraint_settings.mLimitMin[JPH::SixDOFConstraintSettings::EAxis::TranslationX] = -LADDER_WIDTH/2.0 - BALLOON_RADIUS - LADDER_MARGIN;
+    constraint_settings.mLimitMax[JPH::SixDOFConstraintSettings::EAxis::TranslationX] =  LADDER_WIDTH/2.0 + BALLOON_RADIUS + LADDER_MARGIN;
+    constraint_settings.mLimitMin[JPH::SixDOFConstraintSettings::EAxis::TranslationY] = -LADDER_HEIGHT/2.0 - BALLOON_RADIUS - LADDER_MARGIN;
+    constraint_settings.mLimitMax[JPH::SixDOFConstraintSettings::EAxis::TranslationY] =  LADDER_HEIGHT/2.0 + BALLOON_RADIUS + LADDER_MARGIN;
+    constraint_settings.mLimitMin[JPH::SixDOFConstraintSettings::EAxis::TranslationZ] = -LADDER_WIDTH/2.0 - BALLOON_RADIUS - LADDER_MARGIN;
+    constraint_settings.mLimitMax[JPH::SixDOFConstraintSettings::EAxis::TranslationZ] =  LADDER_WIDTH/2.0 + BALLOON_RADIUS + LADDER_MARGIN;
+    JPH::Ref<JPH::SixDOFConstraint> constraint = static_cast<JPH::SixDOFConstraint *>(body_interface.CreateConstraint(&constraint_settings, ladder_id, balloon_id));
+    physics_system.AddConstraint(constraint); // TODO is this necessary?
+
     // for balls we shoot, spawned in the main loop
     std::vector<JPH::BodyID> ball_ids;
 
@@ -364,7 +393,7 @@ static int mainBody(int argc, char **argv)
             }
             if (state[SDL_SCANCODE_SPACE])
                 dy += WALK_SPEED * delta_time;
-            if (state[SDL_SCANCODE_LSHIFT] || state[SDL_SCANCODE_RSHIFT])
+            if (state[SDL_SCANCODE_LCTRL] || state[SDL_SCANCODE_RCTRL])
                 dy -= WALK_SPEED * delta_time;
 
             // (possibly) move camera
@@ -396,7 +425,11 @@ static int mainBody(int argc, char **argv)
         draw_settings.mDrawBoundingBox = false;
         renderer->SetCameraPosition(camera_x, camera_y, camera_z);
         physics_system.DrawBodies(draw_settings, JPH::DebugRenderer::sInstance);
-        physics_system.DrawConstraints(JPH::DebugRenderer::sInstance);
+        // physics_system.DrawConstraints(JPH::DebugRenderer::sInstance);
+        // physics_system.DrawConstraintLimits(JPH::DebugRenderer::sInstance);
+        // physics_system.DrawConstraintReferenceFrame(JPH::DebugRenderer::sInstance);
+        // constraint->DrawConstraintLimits(JPH::DebugRenderer::sInstance);
+        
 
         // swap buffers
         SDL_GL_SwapWindow(window.get());
